@@ -7,11 +7,11 @@ from scipy.optimize import curve_fit
 import scipy
 import matplotlib.pyplot as plt
 from math import fabs, pi, asin, sin, log, degrees, acos
-import trendline
+# import trendline
 from scipy.interpolate import interp1d
 import sys
 from collections import OrderedDict
-from skaero.atmosphere import coesa
+import skaero_atmosphere as coesa
 import math
 import scipy.signal as ss
 
