@@ -10,8 +10,6 @@ import os.path
 import cv2
 
 
-
-# CONFIG_FILE_PATH = '../ConfigFiles/spacex/new_spacex.json'
 CONFIG_FILE_PATH = '../ConfigFiles/spacex/new_spacex_with_stage2.json'
 
 
@@ -68,7 +66,7 @@ def decimal_point_conversion(digit_pos_list):
 
 
 
-def get_data(cap, file, t0, out, name, live):
+def get_data(cap, file, file_stage2, t0, out, name, live):
     dt = 1 / cap.get(cv2.CAP_PROP_FPS)
 
     cur_time = 0
@@ -77,7 +75,9 @@ def get_data(cap, file, t0, out, name, live):
     prev_time = 0
     prev_altitude_stage2 = 0
     prev_vel_stage2 = 0
+    prev_time_stage2 = 0
     start = False
+    start_stage2 = False
     dropped_frames = 0
     frame_index = 1
     prev_stage = None
@@ -111,6 +111,7 @@ def get_data(cap, file, t0, out, name, live):
 
     if t0 is not None:
         prev_time = t0 - dt
+        prev_time_stage2 = prev_time
         prev_vel = v0/KMH
         prev_altitude = a0
         cur_time = rtnd(t0, 3)
@@ -118,21 +119,15 @@ def get_data(cap, file, t0, out, name, live):
     while frame is not None:
         _, velocity = session.extract_number(frame, 'velocity', decimal_point_conversion)
         dec, altitude = session.extract_number(frame, 'altitude', decimal_point_conversion)
-        # _, velocity_stage2 = session.extract_number(frame, 'velocity_stage2', decimal_point_conversion)
-        # dec_stage2, altitude_stage2 = session.extract_number(frame, 'altitude_stage2', decimal_point_conversion)
+        _, velocity_stage2 = session.extract_number(frame, 'velocity_stage2', decimal_point_conversion)
+        dec_stage2, altitude_stage2 = session.extract_number(frame, 'altitude_stage2', decimal_point_conversion)
 
         if dec and altitude is not None:
             altitude /= DECIMAL_CONVERSION
 
-        # if dec_stage2 and altitude_stage2 is not None:
-        #     altitude_stage2 /= DECIMAL_CONVERSION
+        if dec_stage2 and altitude_stage2 is not None:
+            altitude_stage2 /= DECIMAL_CONVERSION
 
-        # if prev_vel_stage2 is None:
-        #     prev_vel_stage2 = 0
-    
-        # if prev_altitude_stage2 is None:
-        #     prev_altitude_stage2 = 0
-            
         show_frame(frame)    
             
         if cv2.waitKey(1) & 0xff == ord('q'):
@@ -140,20 +135,13 @@ def get_data(cap, file, t0, out, name, live):
 
         cur_stage = session.get_template_index(frame, 'stage') + 1
         
-        if velocity is not None and altitude is not None and \
-                (check_data(prev_vel, prev_time, velocity/KMH, cur_time, prev_altitude, altitude)
-                 or check_stage_switch(cur_time, cur_stage, prev_stage)):
-
-            velocity /= KMH
-
-            if cur_stage is not None and cur_stage != prev_stage:
-                prev_stage = cur_stage
-
-                time_file.write(json.dumps(OrderedDict([
-                    ('time', rtnd(cur_time, PRECISION)),
-                    ('stage', cur_stage)
-                ])) + '\n')
-                time_file.flush()
+        stage_1_is_ok = velocity is not None and altitude is not None and \
+                (check_data(prev_vel, prev_time, velocity/KMH, cur_time, prev_altitude, altitude))
+        stage_2_is_ok = velocity_stage2 is not None and altitude_stage2 is not None and \
+                check_data(prev_vel_stage2, prev_time_stage2, velocity_stage2/KMH, cur_time, prev_altitude_stage2, altitude_stage2)
+        if stage_1_is_ok:
+            if velocity is not None:
+                velocity /= KMH
 
             json_data = data_to_json(cur_time, velocity, altitude)
             if out:
@@ -168,7 +156,34 @@ def get_data(cap, file, t0, out, name, live):
 
             if velocity > LAUNCH_VELOCITY:
                 start = True
-        else:
+                time_file.write(json.dumps(OrderedDict([
+                    ('time', rtnd(cur_time, PRECISION)),
+                    ('stage', 1)
+                ])) + '\n')
+
+        if stage_2_is_ok:
+            if velocity_stage2 is not None:
+                velocity_stage2 /= KMH
+
+            json_data = data_to_json(cur_time, velocity_stage2, altitude_stage2)
+            if out:
+                print(data_to_json(cur_time, velocity_stage2, altitude_stage2))
+
+            if start_stage2:
+                write_to_file(file_stage2, json_data)
+
+            prev_time_stage2 = cur_time
+            prev_vel_stage2 = velocity_stage2
+            prev_altitude_stage2 = altitude_stage2
+
+            if velocity_stage2 > 0:
+                start_stage2 = True
+                time_file.write(json.dumps(OrderedDict([
+                    ('time', rtnd(cur_time, PRECISION)),
+                    ('stage', 2)
+                ])) + '\n')
+
+        if not (stage_1_is_ok or stage_2_is_ok):
             dropped_frames += 1
 
             if dropped_frames % DROPPED_FRAME_THRESH == 0:
@@ -218,6 +233,7 @@ def main():
     args = set_args()
 
     dest = args.destination_path + '.json'
+    dest_stage2 = args.destination_path  + '_stage2.json'
 
     if os.path.isfile(dest) and not args.force:
         if input("'%s' already exists. Do you want to override it? [y/n]: " % args.destination_path) != 'y':
@@ -225,6 +241,7 @@ def main():
             exit(4)
 
     file = open(dest, 'w')
+    file_stage2 = open(dest_stage2, 'w')
     cap = extract_video.get_capture(args.capture_path)
 
     if cap is None or cap.get(cv2.CAP_PROP_FPS) == 0:
@@ -235,7 +252,7 @@ def main():
         print("Cannot access video in file. Please make sure the path to the file is valid")
         exit(3)
 
-    get_data(cap, file, to_float(args.launch_time), args.out, args.destination_path, args.live)
+    get_data(cap, file, file_stage2, to_float(args.launch_time), args.out, args.destination_path, args.live)
 
 
 if __name__ == '__main__':
